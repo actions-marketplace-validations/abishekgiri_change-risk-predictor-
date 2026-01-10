@@ -65,5 +65,13 @@ def main():
             print("Error: --pr and --repo are required for --post-comment")
             sys.exit(1)
 
+    # 5. Enforcement
+    # Exit with validation failure (1) if risk is HIGH to block the PR
+    if score_data["risk_level"] == "HIGH":
+        print("❌ Blocked: Risk level is HIGH.")
+        sys.exit(1)
+    
+    sys.exit(0)
+
 if __name__ == "__main__":
     main()
