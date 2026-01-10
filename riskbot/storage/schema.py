@@ -27,6 +27,19 @@ def init_db():
     )
     """)
     
+    # Labels Table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS pr_labels (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        repo TEXT,
+        pr_number INTEGER,
+        label_type TEXT,
+        severity INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(repo, pr_number) REFERENCES pr_runs(repo, pr_number)
+    )
+    """)
+    
     # Index for fast lookup by PR
     cursor.execute("""
     CREATE INDEX IF NOT EXISTS idx_pr_runs_repo_pr ON pr_runs(repo, pr_number)

@@ -58,3 +58,18 @@ def save_run(
         print(f"Appended run to JSONL: {RISK_JSONL_PATH}")
     except Exception as e:
         print(f"Error saving to JSONL: {e}")
+
+def add_label(repo: str, pr_number: int, label_type: str, severity: int = None):
+    """Add a label to a PR."""
+    init_db()
+    
+    conn = sqlite3.connect(RISK_DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        INSERT INTO pr_labels (repo, pr_number, label_type, severity)
+        VALUES (?, ?, ?, ?)
+    """, (repo, pr_number, label_type, severity))
+    
+    conn.commit()
+    conn.close()
