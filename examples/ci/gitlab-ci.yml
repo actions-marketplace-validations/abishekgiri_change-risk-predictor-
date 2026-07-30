@@ -1,0 +1,117 @@
+##############################################################################
+# ReleaseGate governance gate for GitLab CI
+#
+# Required CI/CD variables (Settings → CI/CD → Variables):
+#   RELEASEGATE_URL       – your ReleaseGate instance
+#   RELEASEGATE_TOKEN     – API token with policy:write scope
+#   RELEASEGATE_TENANT_ID – your tenant slug
+#   JIRA_ISSUE_KEY        – e.g. PROJ-42  (set per-project or per-pipeline; optional)
+#   JIRA_PROJECT_KEY      – e.g. PROJ
+#   JIRA_TRANSITION_ID    – Jira workflow transition ID (default 31; find yours in Jira → Workflow editor)
+#   DEPLOY_ENV            – e.g. PRODUCTION (optional, default below)
+##############################################################################
+stages:
+  - governance
+  - deploy
+
+variables:
+  DEPLOY_ENV: "PRODUCTION"
+  JIRA_TRANSITION_ID: "31"   # Override in Settings → CI/CD → Variables for your Jira workflow
+
+# ── Phase 7: declare a decision ID FIRST ─────────────────────────────────
+# Every deploy must obtain a ReleaseGate decision ID before proceeding.
+# The decision ID is stored as a dotenv artifact and passed to later stages.
+releasegate_declare:
+  stage: governance
+  image: curlimages/curl:8.7.1
+  script:
+    - |
+      RESPONSE=$(curl -sS -X POST "${RELEASEGATE_URL}/decisions/declare" \
+        -H "Authorization: Bearer ${RELEASEGATE_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "{
+          \"tenant_id\": \"${RELEASEGATE_TENANT_ID:-default}\",
+          \"repo\": \"${CI_PROJECT_PATH}\",
+          \"environment\": \"${DEPLOY_ENV}\",
+          \"sha\": \"${CI_COMMIT_SHA}\",
+          \"pr_number\": ${CI_MERGE_REQUEST_IID:-0},
+          \"actor_id\": \"${GITLAB_USER_LOGIN:-gitlab-ci}\"
+        }")
+      echo "${RESPONSE}" | tee releasegate_declare.json
+      RG_ID=$(echo "${RESPONSE}" | jq -r '.rg_decision_id // empty')
+      ALLOWED=$(echo "${RESPONSE}" | jq -r '.allowed // false')
+      if [ -z "${RG_ID}" ]; then
+        echo "ERROR: No decision ID returned — governance declaration failed"
+        exit 1
+      fi
+      if [ "${ALLOWED}" != "true" ]; then
+        echo "ERROR: ReleaseGate blocked deploy (decision: ${RG_ID}). Review: ${RELEASEGATE_URL}/decisions/${RG_ID}"
+        exit 1
+      fi
+      echo "Declaration passed (decision: ${RG_ID})"
+      echo "RG_DECISION_ID=${RG_ID}" >> releasegate.env
+  artifacts:
+    reports:
+      dotenv: releasegate.env
+    paths:
+      - releasegate_declare.json
+    expire_in: 7 days
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+# ── Jira transition check (optional — only for Jira-driven workflows) ────
+releasegate_governance:
+  stage: governance
+  image: curlimages/curl:8.7.1
+  needs: [releasegate_declare]
+  script:
+    - |
+      if [ -z "${JIRA_ISSUE_KEY}" ]; then
+        echo "JIRA_ISSUE_KEY not set — skipping Jira transition gate"
+        exit 0
+      fi
+    - |
+      RESPONSE=$(curl -sS -X POST "${RELEASEGATE_URL}/integrations/jira/transition/check" \
+        -H "Authorization: Bearer ${RELEASEGATE_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "{
+          \"issue_key\": \"${JIRA_ISSUE_KEY}\",
+          \"transition_id\": \"${JIRA_TRANSITION_ID:-31}\",
+          \"source_status\": \"Ready for Release\",
+          \"target_status\": \"Done\",
+          \"actor_account_id\": \"gitlab-ci\",
+          \"environment\": \"${DEPLOY_ENV}\",
+          \"project_key\": \"${JIRA_PROJECT_KEY}\",
+          \"issue_type\": \"Story\"
+        }")
+      echo "${RESPONSE}" | tee releasegate_jira.json
+    - |
+      STATUS=$(jq -r '.status // empty' releasegate_jira.json)
+      if [ "$STATUS" = "BLOCKED" ] || [ "$STATUS" = "ERROR" ]; then
+        echo "ReleaseGate denied Jira transition (status=${STATUS})"
+        exit 1
+      fi
+      echo "Jira gate passed (status=${STATUS})"
+  artifacts:
+    paths:
+      - releasegate_jira.json
+    expire_in: 7 days
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+##############################################################################
+# DEPLOY JOB EXAMPLE
+# Wire this after the declare job; the RG_DECISION_ID env var is injected
+# automatically via the dotenv artifact and stamped in your deploy logs.
+##############################################################################
+# deploy_production:
+#   stage: deploy
+#   needs: [releasegate_declare]
+#   environment: production
+#   script:
+#     - echo "Deploying with governance decision ${RG_DECISION_ID}"
+#     # Your actual deploy steps here
+#   rules:
+#     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'

@@ -1,0 +1,42 @@
+# ReleaseGate Technical Roadmap
+
+## Scope Freeze
+ReleaseGate is a Jira-native release governance and enforcement engine.
+
+## Spec Ownership
+- Decision output semantics are owned by `docs/decision-model.md` only.
+- Policy DSL semantics are owned by `docs/policy-dsl.md` only.
+
+## Done
+- Transition-level Jira workflow enforcement is implemented (allow/block/skipped/error).
+- Declarative policy engine is implemented with strict schema validation.
+- Policy snapshot binding is implemented on decisions (`policy_id`, `policy_version`, `policy_hash`).
+- Immutable override ledger is implemented (append-only, hash chained, verifiable).
+- Deterministic decision replay is implemented.
+- Strict mode and separation-of-duties controls are implemented.
+- Policy simulation (`what-if`) capability is implemented.
+- Signed checkpointing and proof-pack export are implemented.
+
+## Next
+- Maintain and publish compatibility guarantees for 3 public artifacts:
+- `soc2_v1` export contract.
+- `proof_pack_v1` format.
+- `checkpoint_v1` format.
+- Public contract versioning and deprecation policy: `docs/contracts/versioning_policy.md`
+- CI contract guardrail: `make verify-public-contracts` and `.github/workflows/public-contracts.yml`
+- Transaction envelope unification (`idempotency key claim` + `primary write` + `audit append` + `ledger update` in one DB transaction) is planned.
+- Forge production hardening with structured decision logs and deterministic timeout handling is in progress.
+- Jira config UX hardening via `validate-jira-config` and versioned mapping templates is in progress.
+- Deploy-time policy bundle validation (`validate-policy-bundle`) is in progress.
+
+## Non-Goals
+- No dashboards.
+- No ML scoring.
+- No source-code or diff storage.
+- No repository cloning for deep analysis.
+- No code-intelligence features.
+
+## Public Artifacts
+- `soc2_v1`: `docs/contracts/soc2_v1.md`
+- `proof_pack_v1`: `docs/contracts/proof_pack_v1.md`
+- `checkpoint_v1`: `docs/contracts/checkpoint_v1.md`

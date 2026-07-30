@@ -4,19 +4,20 @@ import tempfile
 import subprocess
 import json
 from datetime import datetime
+from pathlib import Path
 from releasegate.saas.worker.auth import get_installation_token, get_github_client
 from releasegate.saas.db.base import SessionLocal
 from releasegate.saas.db.models import AnalysisRun, Repository
 from releasegate.saas.policy import resolve_effective_policy
+from releasegate.utils.paths import safe_join_under
 
 def run_analysis_job(installation_id: int, repo_slug: str, pr_number: int, commit_sha: str):
     """
     Main Worker Task:
     1. Auth with GitHub App
     2. Set Status = Pending
-    3. Clone Repo (securely)
-    4. Run ComplianceBot
-    5. Set Status = Success/Failure
+    3. Run metadata-only PR risk classification
+    4. Set Status = Success/Failure
     """
     print(f"WORKER: Starting analysis for {repo_slug} PR #{pr_number}")
     db = SessionLocal()
@@ -28,7 +29,7 @@ def run_analysis_job(installation_id: int, repo_slug: str, pr_number: int, commi
         # Check Commit Status API
         repo.get_commit(commit_sha).create_status(
             state="pending",
-            context="ComplianceBot/SaaS",
+            context="ReleaseGate/SaaS",
             description="Analysis in progress..."
         )
         
@@ -38,30 +39,19 @@ def run_analysis_job(installation_id: int, repo_slug: str, pr_number: int, commi
         work_dir = tempfile.mkdtemp(prefix=f"saas_run_{pr_number}_")
         
         try:
-            # 3. Clone
-            clone_url = f"https://x-access-token:{token}@github.com/{repo_slug}.git"
-            subprocess.run(["git", "clone", clone_url, "."], cwd=work_dir, check=True, capture_output=True)
-            subprocess.run(["git", "checkout", commit_sha], cwd=work_dir, check=True, capture_output=True)
-            
-            # 4. Run Analysis (subprocess to CLI)
-            # We use the CLI directly since we are in the same environment (or container)
-            # Enforcing BLOCK mode effectively via check
-            
-            # Note: In real prod, this runs inside a Docker container.
-            # Here, we assume 'releasegate' is installed in the worker env.
-            
+            # 3. Run minimal GitHub metadata analysis (no repo clone, no diff storage)
             cmd = [
                 "releasegate", "analyze-pr",
                 "--repo", repo_slug,
                 "--pr", str(pr_number),
-                "--token", token, # Pass app token as GITHUB_TOKEN
+                "--token", token,
                 "--output", "result.json",
-                "--no-bundle" # MVP: don't store bundle yet
+                "--no-bundle"
             ]
             
-            # Run without environment variable enforcement to get raw result JSON
             env = os.environ.copy()
-            env["COMPLIANCEBOT_ENFORCEMENT"] = "report_only" 
+            env["RELEASEGATE_ENFORCEMENT"] = "report_only"
+            env["COMPLIANCEBOT_ENFORCEMENT"] = "report_only"
             
             proc = subprocess.run(cmd, cwd=work_dir, capture_output=True, text=True, env=env)
             
@@ -84,31 +74,32 @@ def run_analysis_job(installation_id: int, repo_slug: str, pr_number: int, commi
                 except Exception as e:
                     print(f"WORKER: Failed to resolve policy: {e}, using default strictness=block")
             
-            if proc.returncode == 0 and os.path.exists(os.path.join(work_dir, "result.json")):
-                with open(os.path.join(work_dir, "result.json")) as f:
+            result_path = safe_join_under(Path(work_dir), "result.json")
+            if proc.returncode == 0 and result_path.exists():
+                with result_path.open("r", encoding="utf-8") as f:
                     result = json.load(f)
                     verdict = result.get("control_result", "UNKNOWN")
                     # Fix: handle non-int severity
                     sev = result.get("severity", 0)
                     risk_score = int(sev) if isinstance(sev, int) else 0
                 
-                # Phase 9: Apply strictness mapping ONLY if result is BLOCK/NON_COMPLIANT
+                # Phase 9: Apply strictness mapping
                 if verdict == "BLOCK":
                     if strictness == "block":
                         state = "failure"
-                        description = f"Blocked: Risk Level {result.get('severity')}"
+                        description = f"Blocked: Risk Level {result.get('severity_level')}"
                     elif strictness == "warn":
                         state = "success"  # Neutral not widely supported, use success with warning
-                        description = f"Warning (not blocking): Risk Level {result.get('severity')}"
+                        description = f"Warning (not blocking): Risk Level {result.get('severity_level')}"
                     else:  # "pass"
                         state = "success"
-                        description = f"Informational: Risk Level {result.get('severity')} (not enforced)"
+                        description = f"Informational: Risk Level {result.get('severity_level')} (not enforced)"
                 elif verdict == "WARN":
                     state = "success"
-                    description = f"Warning: Risk Level {result.get('severity')}"
-                else:  # COMPLIANT
+                    description = f"Warning: Risk Level {result.get('severity_level')}"
+                else:  # PASS
                     state = "success"
-                    description = "Compliance Checks Passed"
+                    description = "Risk classification completed"
             else:
                 print(f"CLI Failed: {proc.stderr}")
                 description = "Internal Analysis Error"
@@ -117,7 +108,7 @@ def run_analysis_job(installation_id: int, repo_slug: str, pr_number: int, commi
             # 5. Report Final Status
             repo.get_commit(commit_sha).create_status(
                 state=state,
-                context="ComplianceBot/SaaS",
+                context="ReleaseGate/SaaS",
                 description=description
             )
             

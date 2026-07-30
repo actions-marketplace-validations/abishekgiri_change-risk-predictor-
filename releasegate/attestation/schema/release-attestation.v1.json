@@ -1,0 +1,243 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ReleaseGate Release Attestation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "attestation_type": {
+      "const": "releasegate.release_attestation"
+    },
+    "issued_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "policy_schema_version": {
+      "type": "string"
+    },
+    "tenant_id": {
+      "type": "string"
+    },
+    "decision_id": {
+      "type": "string"
+    },
+    "engine_version": {
+      "type": "string"
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repo": {
+          "type": "string"
+        },
+        "commit_sha": {
+          "type": "string"
+        },
+        "merge_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pr_number": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "build_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "release_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo",
+        "commit_sha",
+        "merge_sha",
+        "pr_number",
+        "build_id",
+        "release_id"
+      ]
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "policy_version": {
+          "type": "string"
+        },
+        "policy_hash": {
+          "type": "string"
+        },
+        "policy_bundle_hash": {
+          "type": "string"
+        },
+        "policy_scope": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "policy_resolution_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "policy_version",
+        "policy_hash",
+        "policy_bundle_hash",
+        "policy_scope",
+        "policy_resolution_hash"
+      ]
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "decision": {
+          "enum": [
+            "ALLOW",
+            "BLOCK"
+          ]
+        },
+        "risk_score": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "risk_level": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason_codes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "decision",
+        "risk_score",
+        "reason_codes"
+      ]
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "signals_summary": {
+          "type": "object"
+        },
+        "signal_hash": {
+          "type": "string"
+        },
+        "dependency_provenance": {
+          "type": "object"
+        },
+        "dependency_combined_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "override_flags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "checkpoint_hashes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "decision_bundle_hash": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "signals_summary",
+        "dependency_provenance",
+        "checkpoint_hashes",
+        "decision_bundle_hash"
+      ]
+    },
+    "issuer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "org_id": {
+          "type": "string"
+        },
+        "app_id": {
+          "type": "string"
+        },
+        "environment": {
+          "type": "string"
+        },
+        "key_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "org_id",
+        "app_id",
+        "environment",
+        "key_id"
+      ]
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": {
+          "const": "ed25519"
+        },
+        "signed_payload_hash": {
+          "type": "string"
+        },
+        "signature_bytes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "algorithm",
+        "signed_payload_hash",
+        "signature_bytes"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "attestation_type",
+    "issued_at",
+    "tenant_id",
+    "decision_id",
+    "engine_version",
+    "subject",
+    "policy",
+    "decision",
+    "evidence",
+    "issuer",
+    "signature"
+  ]
+}

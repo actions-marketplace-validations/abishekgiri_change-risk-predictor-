@@ -1,0 +1,1004 @@
+import sqlite3
+import tempfile
+
+import pytest
+
+from releasegate.config import DB_PATH
+from releasegate.storage import migrations as storage_migrations
+from releasegate.storage.schema import init_db
+
+
+def test_forward_only_migrations_applied_and_tenant_columns_present():
+    current = init_db()
+    assert current.startswith("2026")
+
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT migration_id FROM schema_migrations ORDER BY migration_id ASC")
+        migration_ids = [row[0] for row in cur.fetchall()]
+        assert "20260212_001_tenant_audit_decisions" in migration_ids
+        assert "20260212_002_tenant_audit_overrides" in migration_ids
+        assert "20260212_003_policy_snapshots" in migration_ids
+        assert "20260212_004_checkpoint_and_proof_records" in migration_ids
+        assert "20260212_005_tenant_constraints_and_policy_bundles" in migration_ids
+        assert "20260212_006_metrics_events" in migration_ids
+        assert "20260212_007_tenant_composite_primary_keys" in migration_ids
+        assert "20260212_008_security_auth_tables" in migration_ids
+        assert "20260212_009_security_hardening" in migration_ids
+        assert "20260212_010_phase4_idempotency_and_hashes" in migration_ids
+        assert "20260213_011_attestations_and_transparency_log" in migration_ids
+        assert "20260213_012_transparency_engine_build" in migration_ids
+        assert "20260213_013_transparency_daily_roots" in migration_ids
+        assert "20260214_014_attestation_immutability" in migration_ids
+        assert "20260218_015_jira_lock_ledger" in migration_ids
+        assert "20260218_016_decision_external_refs" in migration_ids
+        assert "20260219_017_policy_snapshot_rollout" in migration_ids
+        assert "20260219_018_lock_chain_governance" in migration_ids
+        assert "20260220_019_replay_and_evidence_graph" in migration_ids
+        assert "20260220_020_replay_status_column" in migration_ids
+        assert "20260220_021_override_expiry_metadata" in migration_ids
+        assert "20260220_022_policy_registry_control_plane" in migration_ids
+        assert "20260226_023_policy_lifecycle_state_machine" in migration_ids
+        assert "20260228_024_external_root_anchors" in migration_ids
+        assert "20260301_025_tenant_signing_key_lifecycle" in migration_ids
+        assert "20260302_026_anchor_jobs" in migration_ids
+        assert "20260303_027_kms_custody_and_compromise_playbook" in migration_ids
+        assert "20260304_028_saas_operational_controls" in migration_ids
+        assert "20260305_029_policy_rollout_and_simulation" in migration_ids
+        assert "20260306_030_decision_transition_authority" in migration_ids
+        assert "20260307_031_cross_system_correlation_fabric" in migration_ids
+        assert "20260308_032_independent_daily_checkpoints" in migration_ids
+        assert "20260309_033_approval_orchestration" in migration_ids
+        assert "20260310_034_signal_attestations" in migration_ids
+        assert "20260311_035_governance_query_indexes" in migration_ids
+        assert "20260312_036_governance_dashboard_rollups" in migration_ids
+        assert "20260313_037_enterprise_onboarding_config" in migration_ids
+        assert "20260314_038_tenant_simulation_runs" in migration_ids
+        assert "20260315_039_onboarding_activation_history" in migration_ids
+        assert "20260316_040_policy_snapshot_cache" in migration_ids
+        assert "20260317_041_saas_tenant_admin_and_roles" in migration_ids
+        assert "20260318_042_phase28_governance_moat" in migration_ids
+        assert "20260429_043_change_records_canonical" in migration_ids
+        assert "20260430_044_attestation_id_per_run_unique" in migration_ids
+
+        cur.execute("PRAGMA table_info(audit_decisions)")
+        decision_info = cur.fetchall()
+        decision_cols = {row[1] for row in decision_info}
+        decision_pk = [row[1] for row in sorted((r for r in decision_info if r[5] > 0), key=lambda r: r[5])]
+        assert "tenant_id" in decision_cols
+        assert "input_hash" in decision_cols
+        assert "policy_hash" in decision_cols
+        assert "replay_hash" in decision_cols
+        assert decision_pk == ["tenant_id", "decision_id"]
+        cur.execute("PRAGMA index_list(audit_decisions)")
+        decision_indexes = {row[1] for row in cur.fetchall()}
+        assert "idx_audit_decisions_tenant_created_decision" in decision_indexes
+        assert "idx_audit_decisions_tenant_release_created_decision" in decision_indexes
+
+        cur.execute("PRAGMA table_info(audit_overrides)")
+        override_info = cur.fetchall()
+        override_cols = {row[1] for row in override_info}
+        override_pk = [row[1] for row in sorted((r for r in override_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "ttl_seconds",
+            "expires_at",
+            "requested_by",
+            "approved_by",
+        } <= override_cols
+        assert override_pk == ["tenant_id", "override_id"]
+        cur.execute("PRAGMA index_list(audit_overrides)")
+        override_indexes = {row[1] for row in cur.fetchall()}
+        assert "idx_overrides_tenant_decision_created" in override_indexes
+        assert "idx_overrides_tenant_actor_created" in override_indexes
+
+        cur.execute("PRAGMA table_info(audit_checkpoints)")
+        checkpoint_info = cur.fetchall()
+        checkpoint_pk = [row[1] for row in sorted((r for r in checkpoint_info if r[5] > 0), key=lambda r: r[5])]
+        assert checkpoint_pk == ["tenant_id", "checkpoint_id"]
+
+        cur.execute("PRAGMA table_info(audit_proof_packs)")
+        proof_pack_info = cur.fetchall()
+        proof_pack_pk = [row[1] for row in sorted((r for r in proof_pack_info if r[5] > 0), key=lambda r: r[5])]
+        assert proof_pack_pk == ["tenant_id", "proof_pack_id"]
+
+        cur.execute("PRAGMA table_info(api_keys)")
+        api_keys_info = cur.fetchall()
+        api_keys_pk = [row[1] for row in sorted((r for r in api_keys_info if r[5] > 0), key=lambda r: r[5])]
+        assert api_keys_pk == ["tenant_id", "key_id"]
+
+        cur.execute("PRAGMA table_info(webhook_nonces)")
+        nonces_info = cur.fetchall()
+        nonces_pk = [row[1] for row in sorted((r for r in nonces_info if r[5] > 0), key=lambda r: r[5])]
+        assert nonces_pk == ["tenant_id", "integration_id", "nonce"]
+
+        cur.execute("PRAGMA table_info(security_audit_events)")
+        sec_info = cur.fetchall()
+        sec_pk = [row[1] for row in sorted((r for r in sec_info if r[5] > 0), key=lambda r: r[5])]
+        assert sec_pk == ["tenant_id", "event_id"]
+
+        cur.execute("PRAGMA table_info(checkpoint_signing_keys)")
+        checkpoint_keys_info = cur.fetchall()
+        checkpoint_keys_cols = {row[1] for row in checkpoint_keys_info}
+        checkpoint_keys_pk = [row[1] for row in sorted((r for r in checkpoint_keys_info if r[5] > 0), key=lambda r: r[5])]
+        assert {"encrypted_data_key", "kms_key_id", "encryption_mode"} <= checkpoint_keys_cols
+        assert checkpoint_keys_pk == ["tenant_id", "key_id"]
+
+        cur.execute("PRAGMA table_info(tenant_signing_keys)")
+        tenant_signing_keys_info = cur.fetchall()
+        tenant_signing_keys_cols = {row[1] for row in tenant_signing_keys_info}
+        tenant_signing_keys_pk = [
+            row[1] for row in sorted((r for r in tenant_signing_keys_info if r[5] > 0), key=lambda r: r[5])
+        ]
+        assert {
+            "tenant_id",
+            "key_id",
+            "public_key",
+            "encrypted_private_key",
+            "encrypted_data_key",
+            "kms_key_id",
+            "encryption_mode",
+            "signing_mode",
+            "status",
+            "created_by",
+            "created_at",
+            "rotated_at",
+            "revoked_at",
+            "metadata_json",
+        } <= tenant_signing_keys_cols
+        assert tenant_signing_keys_pk == ["tenant_id", "key_id"]
+
+        cur.execute("PRAGMA table_info(webhook_signing_keys)")
+        webhook_keys_info = cur.fetchall()
+        webhook_keys_pk = [row[1] for row in sorted((r for r in webhook_keys_info if r[5] > 0), key=lambda r: r[5])]
+        assert webhook_keys_pk == ["tenant_id", "integration_id", "key_id"]
+
+        cur.execute("PRAGMA table_info(idempotency_keys)")
+        idem_info = cur.fetchall()
+        idem_pk = [row[1] for row in sorted((r for r in idem_info if r[5] > 0), key=lambda r: r[5])]
+        assert idem_pk == ["tenant_id", "operation", "idem_key"]
+
+        cur.execute("PRAGMA table_info(policy_registry_entries)")
+        policy_registry_info = cur.fetchall()
+        policy_registry_cols = {row[1] for row in policy_registry_info}
+        assert "archived_at" in policy_registry_cols
+
+        cur.execute("PRAGMA table_info(policy_registry_events)")
+        policy_event_info = cur.fetchall()
+        policy_event_pk = [row[1] for row in sorted((r for r in policy_event_info if r[5] > 0), key=lambda r: r[5])]
+        assert policy_event_pk == ["tenant_id", "event_id"]
+
+        cur.execute("PRAGMA table_info(audit_attestations)")
+        attestation_info = cur.fetchall()
+        attestation_cols = {row[1] for row in attestation_info}
+        attestation_pk = [row[1] for row in sorted((r for r in attestation_info if r[5] > 0), key=lambda r: r[5])]
+        assert {"compromised", "compromised_reason", "compromised_at", "superseded_by_resign_id"} <= attestation_cols
+        assert attestation_pk == ["tenant_id", "attestation_id"]
+
+        cur.execute("PRAGMA table_info(key_access_log)")
+        key_access_info = cur.fetchall()
+        key_access_cols = {row[1] for row in key_access_info}
+        key_access_pk = [row[1] for row in sorted((r for r in key_access_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "access_id",
+            "key_id",
+            "operation",
+            "actor",
+            "purpose",
+            "metadata_json",
+            "created_at",
+        } <= key_access_cols
+        assert key_access_pk == ["tenant_id", "access_id"]
+
+        cur.execute("PRAGMA table_info(tenant_governance_settings)")
+        governance_info = cur.fetchall()
+        governance_cols = {row[1] for row in governance_info}
+        governance_pk = [row[1] for row in sorted((r for r in governance_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "max_decisions_per_month",
+            "max_anchors_per_day",
+            "max_overrides_per_month",
+            "quota_enforcement_mode",
+            "security_state",
+            "security_reason",
+            "security_since",
+            "updated_at",
+            "updated_by",
+        } <= governance_cols
+        assert governance_pk == ["tenant_id"]
+
+        cur.execute("PRAGMA table_info(tenant_usage_counters)")
+        usage_info = cur.fetchall()
+        usage_cols = {row[1] for row in usage_info}
+        usage_pk = [row[1] for row in sorted((r for r in usage_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "period_type",
+            "period_start",
+            "decisions_count",
+            "anchors_count",
+            "overrides_count",
+            "updated_at",
+        } <= usage_cols
+        assert usage_pk == ["tenant_id", "period_type", "period_start"]
+
+        cur.execute("PRAGMA table_info(tenant_onboarding_config)")
+        onboarding_info = cur.fetchall()
+        onboarding_cols = {row[1] for row in onboarding_info}
+        onboarding_pk = [row[1] for row in sorted((r for r in onboarding_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "jira_instance_id",
+            "project_keys_json",
+            "workflow_ids_json",
+            "transition_ids_json",
+            "mode",
+            "canary_pct",
+            "created_at",
+            "updated_at",
+        } <= onboarding_cols
+        assert onboarding_pk == ["tenant_id"]
+
+        cur.execute("PRAGMA table_info(tenant_simulation_runs)")
+        simulation_info = cur.fetchall()
+        simulation_cols = {row[1] for row in simulation_info}
+        simulation_pk = [row[1] for row in sorted((r for r in simulation_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "run_id",
+            "lookback_days",
+            "result_json",
+            "ran_at",
+        } <= simulation_cols
+        assert simulation_pk == ["tenant_id", "run_id"]
+
+        cur.execute("PRAGMA table_info(tenant_onboarding_activation_history)")
+        activation_history_info = cur.fetchall()
+        activation_history_cols = {row[1] for row in activation_history_info}
+        activation_history_pk = [
+            row[1] for row in sorted((r for r in activation_history_info if r[5] > 0), key=lambda r: r[5])
+        ]
+        assert {
+            "tenant_id",
+            "history_id",
+            "mode",
+            "canary_pct",
+            "previous_updated_at",
+            "saved_at",
+        } <= activation_history_cols
+        assert activation_history_pk == ["history_id"]
+
+        cur.execute("PRAGMA table_info(tenant_policy_snapshot_cache)")
+        snapshot_cache_info = cur.fetchall()
+        snapshot_cache_cols = {row[1] for row in snapshot_cache_info}
+        snapshot_cache_pk = [row[1] for row in sorted((r for r in snapshot_cache_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "scope_key",
+            "snapshot_hash",
+            "snapshot_json",
+            "resolved_at",
+            "ttl_seconds",
+            "source",
+        } <= snapshot_cache_cols
+        assert snapshot_cache_pk == ["tenant_id", "scope_key"]
+
+        cur.execute("PRAGMA table_info(tenant_admin_profiles)")
+        tenant_profile_info = cur.fetchall()
+        tenant_profile_cols = {row[1] for row in tenant_profile_info}
+        tenant_profile_pk = [row[1] for row in sorted((r for r in tenant_profile_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "org_name",
+            "plan_tier",
+            "region",
+            "created_at",
+            "updated_at",
+            "created_by",
+            "updated_by",
+        } <= tenant_profile_cols
+        assert tenant_profile_pk == ["tenant_id"]
+
+        cur.execute("PRAGMA table_info(tenant_role_assignments)")
+        tenant_role_info = cur.fetchall()
+        tenant_role_cols = {row[1] for row in tenant_role_info}
+        tenant_role_pk = [row[1] for row in sorted((r for r in tenant_role_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "actor_id",
+            "role",
+            "assigned_by",
+            "assigned_at",
+        } <= tenant_role_cols
+        assert tenant_role_pk == ["tenant_id", "actor_id", "role"]
+
+        cur.execute("PRAGMA table_info(tenant_security_anomaly_events)")
+        anomaly_info = cur.fetchall()
+        anomaly_cols = {row[1] for row in anomaly_info}
+        anomaly_pk = [row[1] for row in sorted((r for r in anomaly_info if r[5] > 0), key=lambda r: r[5])]
+        assert {"tenant_id", "event_id", "signal_type", "operation", "details_json", "created_at"} <= anomaly_cols
+        assert anomaly_pk == ["tenant_id", "event_id"]
+
+        cur.execute("PRAGMA table_info(tenant_security_state_events)")
+        state_event_info = cur.fetchall()
+        state_event_cols = {row[1] for row in state_event_info}
+        state_event_pk = [row[1] for row in sorted((r for r in state_event_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "event_id",
+            "from_state",
+            "to_state",
+            "reason",
+            "source",
+            "actor",
+            "metadata_json",
+            "created_at",
+        } <= state_event_cols
+        assert state_event_pk == ["tenant_id", "event_id"]
+
+        cur.execute("PRAGMA table_info(tenant_key_compromise_events)")
+        compromise_info = cur.fetchall()
+        compromise_cols = {row[1] for row in compromise_info}
+        compromise_pk = [row[1] for row in sorted((r for r in compromise_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "event_id",
+            "revoked_key_id",
+            "replacement_key_id",
+            "compromise_start",
+            "compromise_end",
+            "affected_count",
+            "affected_attestation_ids_json",
+        } <= compromise_cols
+        assert compromise_pk == ["tenant_id", "event_id"]
+
+        cur.execute("PRAGMA table_info(attestation_resignatures)")
+        resign_info = cur.fetchall()
+        resign_cols = {row[1] for row in resign_info}
+        resign_pk = [row[1] for row in sorted((r for r in resign_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "resign_id",
+            "attestation_id",
+            "decision_id",
+            "new_key_id",
+            "supersedes_attestation_id",
+            "attestation_json",
+        } <= resign_cols
+        assert resign_pk == ["tenant_id", "resign_id"]
+
+        cur.execute("PRAGMA table_info(audit_transparency_log)")
+        transparency_info = cur.fetchall()
+        transparency_cols = {row[1] for row in transparency_info}
+        transparency_pk = [row[1] for row in sorted((r for r in transparency_info if r[5] > 0), key=lambda r: r[5])]
+        assert "tenant_id" in transparency_cols
+        assert "engine_git_sha" in transparency_cols
+        assert "engine_version" in transparency_cols
+        assert transparency_pk == ["tenant_id", "attestation_id"]
+
+        cur.execute("PRAGMA table_info(audit_transparency_roots)")
+        root_info = cur.fetchall()
+        root_cols = {row[1] for row in root_info}
+        root_pk = [row[1] for row in sorted((r for r in root_info if r[5] > 0), key=lambda r: r[5])]
+        assert "tenant_id" in root_cols
+        assert "date_utc" in root_cols
+        assert "leaf_count" in root_cols
+        assert "root_hash" in root_cols
+        assert root_pk == ["tenant_id", "date_utc"]
+
+        cur.execute("PRAGMA table_info(audit_external_root_anchors)")
+        external_anchor_info = cur.fetchall()
+        external_anchor_cols = {row[1] for row in external_anchor_info}
+        external_anchor_pk = [
+            row[1] for row in sorted((r for r in external_anchor_info if r[5] > 0), key=lambda r: r[5])
+        ]
+        assert {
+            "tenant_id",
+            "anchor_id",
+            "provider",
+            "date_utc",
+            "root_hash",
+            "external_ref",
+            "receipt_json",
+            "created_at",
+        } <= external_anchor_cols
+        assert external_anchor_pk == ["tenant_id", "anchor_id"]
+
+        cur.execute("PRAGMA table_info(anchor_jobs)")
+        anchor_job_info = cur.fetchall()
+        anchor_job_cols = {row[1] for row in anchor_job_info}
+        anchor_job_pk = [row[1] for row in sorted((r for r in anchor_job_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "job_id",
+            "root_hash",
+            "date_utc",
+            "ledger_head_seq",
+            "status",
+            "attempts",
+            "next_attempt_at",
+            "last_error",
+            "external_anchor_id",
+            "created_at",
+            "updated_at",
+            "submitted_at",
+            "confirmed_at",
+        } <= anchor_job_cols
+        assert anchor_job_pk == ["tenant_id", "job_id"]
+
+        cur.execute("PRAGMA table_info(jira_lock_events)")
+        lock_event_info = cur.fetchall()
+        lock_event_cols = {row[1] for row in lock_event_info}
+        lock_event_pk = [row[1] for row in sorted((r for r in lock_event_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "event_id",
+            "issue_key",
+            "event_type",
+            "chain_id",
+            "seq",
+            "prev_hash",
+            "event_hash",
+            "ttl_seconds",
+            "expires_at",
+            "justification",
+            "context_json",
+        } <= lock_event_cols
+        assert lock_event_pk == ["tenant_id", "event_id"]
+
+        cur.execute("PRAGMA table_info(jira_issue_locks_current)")
+        lock_current_info = cur.fetchall()
+        lock_current_cols = {row[1] for row in lock_current_info}
+        lock_current_pk = [row[1] for row in sorted((r for r in lock_current_info if r[5] > 0), key=lambda r: r[5])]
+        assert {"tenant_id", "issue_key", "locked"} <= lock_current_cols
+        assert lock_current_pk == ["tenant_id", "issue_key"]
+
+        cur.execute("PRAGMA table_info(audit_decision_refs)")
+        ref_info = cur.fetchall()
+        ref_cols = {row[1] for row in ref_info}
+        ref_pk = [row[1] for row in sorted((r for r in ref_info if r[5] > 0), key=lambda r: r[5])]
+        assert {"tenant_id", "decision_id", "repo", "ref_type", "ref_value"} <= ref_cols
+        assert ref_pk == ["tenant_id", "decision_id", "ref_type", "ref_value"]
+
+        cur.execute("PRAGMA table_info(decision_transition_links)")
+        linkage_info = cur.fetchall()
+        linkage_cols = {row[1] for row in linkage_info}
+        linkage_pk = [row[1] for row in sorted((r for r in linkage_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "decision_id",
+            "jira_issue_id",
+            "transition_id",
+            "actor",
+            "source_status",
+            "target_status",
+            "policy_id",
+            "policy_version",
+            "policy_hash",
+            "context_hash",
+            "expires_at",
+            "consumed",
+            "consumed_at",
+            "consumed_by_request_id",
+            "created_at",
+        } <= linkage_cols
+        assert linkage_pk == ["tenant_id", "decision_id"]
+        cur.execute("PRAGMA index_list(decision_transition_links)")
+        linkage_indexes = {row[1] for row in cur.fetchall()}
+        assert "idx_decision_links_tenant_actor_created" in linkage_indexes
+        assert "idx_decision_links_tenant_transition_created" in linkage_indexes
+
+        cur.execute("PRAGMA table_info(deployment_decision_links)")
+        deploy_link_info = cur.fetchall()
+        deploy_link_cols = {row[1] for row in deploy_link_info}
+        deploy_link_pk = [row[1] for row in sorted((r for r in deploy_link_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "deployment_event_id",
+            "decision_id",
+            "jira_issue_id",
+            "correlation_id",
+            "environment",
+            "service",
+            "artifact_digest",
+            "risk_eval_id",
+            "risk_evaluated_at",
+            "override_state_at_deploy",
+            "override_id",
+            "deployed_at",
+            "source",
+            "contract_mode",
+            "contract_verdict",
+            "violation_codes_json",
+            "reason",
+            "created_at",
+        } <= deploy_link_cols
+        assert deploy_link_pk == ["tenant_id", "deployment_event_id"]
+
+        cur.execute("PRAGMA table_info(audit_independent_daily_checkpoints)")
+        daily_cp_info = cur.fetchall()
+        daily_cp_cols = {row[1] for row in daily_cp_info}
+        daily_cp_pk = [row[1] for row in sorted((r for r in daily_cp_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "checkpoint_id",
+            "date_utc",
+            "as_of_utc",
+            "ledger_root",
+            "ledger_size",
+            "prev_checkpoint_hash",
+            "checkpoint_hash",
+            "signature_algorithm",
+            "signature_value",
+            "signing_key_id",
+            "anchor_provider",
+            "anchor_ref",
+            "anchor_receipt_json",
+            "created_at",
+        } <= daily_cp_cols
+        assert daily_cp_pk == ["tenant_id", "checkpoint_id"]
+
+        cur.execute("PRAGMA table_info(decision_approvals)")
+        decision_approvals_info = cur.fetchall()
+        decision_approvals_cols = {row[1] for row in decision_approvals_info}
+        decision_approvals_pk = [row[1] for row in sorted((r for r in decision_approvals_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "approval_id",
+            "decision_id",
+            "approval_scope_hash",
+            "approval_scope_json",
+            "approval_group",
+            "approver_actor",
+            "approver_role",
+            "justification_json",
+            "justification_hash",
+            "request_id",
+            "created_at",
+            "revoked_at",
+            "revoked_reason",
+        } <= decision_approvals_cols
+        assert decision_approvals_pk == ["tenant_id", "approval_id"]
+
+        cur.execute("PRAGMA table_info(signal_attestations)")
+        signal_attest_info = cur.fetchall()
+        signal_attest_cols = {row[1] for row in signal_attest_info}
+        signal_attest_pk = [row[1] for row in sorted((r for r in signal_attest_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "signal_id",
+            "signal_type",
+            "signal_source",
+            "subject_type",
+            "subject_id",
+            "computed_at",
+            "expires_at",
+            "payload_json",
+            "signal_hash",
+            "sig_alg",
+            "signature",
+            "key_id",
+            "created_at",
+        } <= signal_attest_cols
+        assert signal_attest_pk == ["tenant_id", "signal_id"]
+        cur.execute("PRAGMA table_info(policy_resolved_snapshots)")
+        snap_info = cur.fetchall()
+        snap_cols = {row[1] for row in snap_info}
+        snap_pk = [row[1] for row in sorted((r for r in snap_info if r[5] > 0), key=lambda r: r[5])]
+        assert {"tenant_id", "snapshot_id", "policy_hash", "snapshot_json"} <= snap_cols
+        assert snap_pk == ["tenant_id", "snapshot_id"]
+
+        cur.execute("PRAGMA table_info(policy_decision_records)")
+        pdr_info = cur.fetchall()
+        pdr_cols = {row[1] for row in pdr_info}
+        pdr_pk = [row[1] for row in sorted((r for r in pdr_info if r[5] > 0), key=lambda r: r[5])]
+        assert {"tenant_id", "decision_id", "snapshot_id", "policy_hash", "decision"} <= pdr_cols
+        assert pdr_pk == ["tenant_id", "decision_id"]
+
+        cur.execute("PRAGMA table_info(policy_releases)")
+        releases_info = cur.fetchall()
+        releases_cols = {row[1] for row in releases_info}
+        releases_pk = [row[1] for row in sorted((r for r in releases_info if r[5] > 0), key=lambda r: r[5])]
+        assert {"tenant_id", "release_id", "policy_id", "snapshot_id", "target_env", "state"} <= releases_cols
+        assert releases_pk == ["tenant_id", "release_id"]
+
+        cur.execute("PRAGMA table_info(active_policy_pointers)")
+        pointers_info = cur.fetchall()
+        pointers_cols = {row[1] for row in pointers_info}
+        pointers_pk = [row[1] for row in sorted((r for r in pointers_info if r[5] > 0), key=lambda r: r[5])]
+        assert {"tenant_id", "policy_id", "target_env", "active_release_id"} <= pointers_cols
+        assert pointers_pk == ["tenant_id", "policy_id", "target_env"]
+
+        cur.execute("PRAGMA table_info(policy_rollouts)")
+        rollouts_info = cur.fetchall()
+        rollouts_cols = {row[1] for row in rollouts_info}
+        rollouts_pk = [row[1] for row in sorted((r for r in rollouts_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "rollout_id",
+            "policy_id",
+            "target_env",
+            "from_release_id",
+            "to_release_id",
+            "mode",
+            "canary_percent",
+            "state",
+            "rollback_to_release_id",
+            "created_by",
+            "started_at",
+            "completed_at",
+            "updated_at",
+            "metadata_json",
+        } <= rollouts_cols
+        assert rollouts_pk == ["tenant_id", "rollout_id"]
+
+        cur.execute("PRAGMA table_info(cross_system_correlations)")
+        correlation_info = cur.fetchall()
+        correlation_cols = {row[1] for row in correlation_info}
+        correlation_pk = [row[1] for row in sorted((r for r in correlation_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "correlation_id",
+            "jira_issue_key",
+            "pr_repo",
+            "pr_sha",
+            "deploy_id",
+            "incident_id",
+            "environment",
+            "change_ticket_key",
+            "decision_id",
+            "created_at",
+            "updated_at",
+        } <= correlation_cols
+        assert correlation_pk == ["tenant_id", "correlation_id"]
+
+        cur.execute("PRAGMA table_info(governance_insights)")
+        insight_info = cur.fetchall()
+        insight_cols = {row[1] for row in insight_info}
+        insight_pk = [row[1] for row in sorted((r for r in insight_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "insight_id",
+            "insight_date_utc",
+            "lookback_days",
+            "override_rate_by_project_json",
+            "deny_rate_by_reason_json",
+            "missing_signal_counts_json",
+            "strict_fail_closed_trigger_counts_json",
+            "metadata_json",
+            "created_at",
+        } <= insight_cols
+        assert insight_pk == ["tenant_id", "insight_id"]
+
+        cur.execute("PRAGMA table_info(governance_recommendations)")
+        recommendation_info = cur.fetchall()
+        recommendation_cols = {row[1] for row in recommendation_info}
+        recommendation_pk = [row[1] for row in sorted((r for r in recommendation_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "recommendation_id",
+            "recommendation_type",
+            "severity",
+            "status",
+            "title",
+            "message",
+            "playbook",
+            "fingerprint",
+            "context_json",
+            "acked_by",
+            "acked_at",
+            "created_at",
+            "updated_at",
+        } <= recommendation_cols
+        assert recommendation_pk == ["tenant_id", "recommendation_id"]
+
+        cur.execute("PRAGMA table_info(policy_rollout_events)")
+        rollout_events_info = cur.fetchall()
+        rollout_events_cols = {row[1] for row in rollout_events_info}
+        rollout_events_pk = [row[1] for row in sorted((r for r in rollout_events_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "event_id",
+            "rollout_id",
+            "event_type",
+            "actor_id",
+            "metadata_json",
+            "created_at",
+        } <= rollout_events_cols
+        assert rollout_events_pk == ["tenant_id", "event_id"]
+
+        cur.execute("PRAGMA table_info(policy_simulation_events)")
+        simulation_info = cur.fetchall()
+        simulation_cols = {row[1] for row in simulation_info}
+        simulation_pk = [row[1] for row in sorted((r for r in simulation_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "simulation_id",
+            "actor_id",
+            "policy_id",
+            "policy_version",
+            "policy_hash",
+            "environment",
+            "input_hash",
+            "result_status",
+            "allow",
+            "reason_codes_json",
+            "summary_json",
+            "created_at",
+        } <= simulation_cols
+        assert simulation_pk == ["tenant_id", "simulation_id"]
+
+        cur.execute("PRAGMA table_info(audit_lock_checkpoints)")
+        lock_cp_info = cur.fetchall()
+        lock_cp_cols = {row[1] for row in lock_cp_info}
+        lock_cp_pk = [row[1] for row in sorted((r for r in lock_cp_info if r[5] > 0), key=lambda r: r[5])]
+        assert {"tenant_id", "checkpoint_id", "chain_id", "head_seq", "head_hash"} <= lock_cp_cols
+        assert lock_cp_pk == ["tenant_id", "checkpoint_id"]
+
+        cur.execute("PRAGMA table_info(governance_override_metrics_daily)")
+        metrics_info = cur.fetchall()
+        metrics_cols = {row[1] for row in metrics_info}
+        metrics_pk = [row[1] for row in sorted((r for r in metrics_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "date_utc",
+            "chain_id",
+            "actor",
+            "overrides_total",
+            "high_risk_overrides_total",
+        } <= metrics_cols
+        assert metrics_pk == ["tenant_id", "date_utc", "chain_id", "actor"]
+
+        cur.execute("PRAGMA table_info(governance_daily_metrics)")
+        dashboard_metrics_info = cur.fetchall()
+        dashboard_metrics_cols = {row[1] for row in dashboard_metrics_info}
+        dashboard_metrics_pk = [
+            row[1] for row in sorted((r for r in dashboard_metrics_info if r[5] > 0), key=lambda r: r[5])
+        ]
+        assert {
+            "tenant_id",
+            "date_utc",
+            "integrity_score",
+            "drift_index",
+            "override_rate",
+            "blocked_count",
+            "strict_mode_count",
+            "override_count",
+            "decision_count",
+            "computed_at",
+            "details_json",
+        } <= dashboard_metrics_cols
+        assert dashboard_metrics_pk == ["tenant_id", "date_utc"]
+        cur.execute("PRAGMA index_list(governance_daily_metrics)")
+        dashboard_metrics_indexes = {row[1] for row in cur.fetchall()}
+        assert "idx_governance_daily_metrics_tenant_date" in dashboard_metrics_indexes
+
+        cur.execute("PRAGMA table_info(audit_decision_replays)")
+        replay_info = cur.fetchall()
+        replay_cols = {row[1] for row in replay_info}
+        replay_pk = [row[1] for row in sorted((r for r in replay_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "replay_id",
+            "decision_id",
+            "match",
+            "status",
+            "diff_json",
+            "old_output_hash",
+            "new_output_hash",
+            "ran_engine_version",
+        } <= replay_cols
+        assert replay_pk == ["tenant_id", "replay_id"]
+
+        cur.execute("PRAGMA table_info(evidence_nodes)")
+        en_info = cur.fetchall()
+        en_cols = {row[1] for row in en_info}
+        en_pk = [row[1] for row in sorted((r for r in en_info if r[5] > 0), key=lambda r: r[5])]
+        assert {"tenant_id", "node_id", "type", "ref", "hash", "payload_json"} <= en_cols
+        assert en_pk == ["tenant_id", "node_id"]
+
+        cur.execute("PRAGMA table_info(evidence_edges)")
+        ee_info = cur.fetchall()
+        ee_cols = {row[1] for row in ee_info}
+        ee_pk = [row[1] for row in sorted((r for r in ee_info if r[5] > 0), key=lambda r: r[5])]
+        assert {"tenant_id", "edge_id", "from_node_id", "to_node_id", "type", "metadata_json"} <= ee_cols
+        assert ee_pk == ["tenant_id", "edge_id"]
+
+        cur.execute("PRAGMA table_info(policy_registry_entries)")
+        pr_info = cur.fetchall()
+        pr_cols = {row[1] for row in pr_info}
+        pr_pk = [row[1] for row in sorted((r for r in pr_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id",
+            "policy_id",
+            "scope_type",
+            "scope_id",
+            "version",
+            "status",
+            "policy_json",
+            "policy_hash",
+            "lint_errors_json",
+            "lint_warnings_json",
+            "rollout_percentage",
+            "rollout_scope",
+            "created_at",
+            "created_by",
+            "activated_at",
+            "activated_by",
+            "archived_at",
+            "supersedes_policy_id",
+        } <= pr_cols
+        assert pr_pk == ["tenant_id", "policy_id"]
+
+        cur.execute("SELECT current_version, migration_id FROM schema_state WHERE id = 1")
+        state = cur.fetchone()
+        assert state is not None
+        latest = storage_migrations.MIGRATIONS[-1].migration_id
+        assert state[0] == latest
+        assert state[1] == latest
+    finally:
+        conn.close()
+
+
+def test_sqlite_migration_batch_rolls_back_on_failure():
+    fail_id = "99999999_fail_atomicity_check"
+
+    def _failing_migration(cursor):
+        cursor.execute("CREATE TABLE fail_marker_table (id INTEGER PRIMARY KEY, note TEXT)")
+        cursor.execute("INSERT INTO fail_marker_table (note) VALUES ('should_rollback')")
+        raise RuntimeError("intentional migration failure")
+
+    bad = storage_migrations.Migration(
+        migration_id=fail_id,
+        description="intentional failure to validate rollback",
+        apply=_failing_migration,
+    )
+
+    with tempfile.NamedTemporaryFile(suffix=".db") as temp:
+        conn = sqlite3.connect(temp.name)
+        original = storage_migrations.MIGRATIONS
+        storage_migrations.MIGRATIONS = [bad]
+        try:
+            with pytest.raises(RuntimeError):
+                storage_migrations.apply_sqlite_migrations(conn, auto_apply=True)
+
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='fail_marker_table'")
+            assert cur.fetchone() is None
+
+            cur.execute(
+                "SELECT COUNT(*) FROM schema_migrations WHERE migration_id = ?",
+                (fail_id,),
+            )
+            assert cur.fetchone()[0] == 0
+
+            cur.execute("SELECT current_version, migration_id FROM schema_state WHERE id = 1")
+            assert cur.fetchone() is None
+        finally:
+            storage_migrations.MIGRATIONS = original
+            conn.close()
+
+
+# ── Cold-start regression test for the change_records canonical migration ────
+#
+# Background: prior to migration 20260429_043, `change_records` and
+# `change_state_transitions` were only created by fabric/change_record.py's
+# `_ensure_tables()` — a path that analyze-pr's CLI persistence does NOT take.
+# A fresh DB therefore had analyze-pr crash silently on the fabric INSERT
+# (broad except in cli.py captured "relation does not exist" into errors[]).
+# This test pins down the contract that init_db() now creates everything
+# needed for analyze-pr to succeed end-to-end on a fresh DB.
+
+def test_init_db_creates_change_records_tables_on_cold_start():
+    """A fresh DB must have change_records + change_state_transitions
+    after init_db() — no need to call fabric helpers first.
+    """
+    init_db()
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.cursor()
+
+        # change_records exists with expected schema.
+        cur.execute("PRAGMA table_info(change_records)")
+        cr_info = cur.fetchall()
+        assert cr_info, "change_records table missing after init_db"
+        cr_cols = {row[1] for row in cr_info}
+        cr_pk = [row[1] for row in sorted((r for r in cr_info if r[5] > 0), key=lambda r: r[5])]
+        assert {
+            "tenant_id", "change_id", "lifecycle_state", "enforcement_mode",
+            "correlation_id", "violation_codes",
+            "linked_at", "approved_at", "deployed_at", "incident_at", "closed_at",
+            "created_at", "updated_at",
+        } <= cr_cols
+        assert cr_pk == ["tenant_id", "change_id"]
+
+        # change_state_transitions exists with expected schema.
+        cur.execute("PRAGMA table_info(change_state_transitions)")
+        cst_info = cur.fetchall()
+        assert cst_info, "change_state_transitions table missing after init_db"
+        cst_cols = {row[1] for row in cst_info}
+        assert {
+            "tenant_id", "change_id", "from_state", "to_state",
+            "event", "actor", "violation_codes", "created_at",
+        } <= cst_cols
+
+        # Indexes that proof_metrics.py / dashboard queries rely on.
+        cur.execute("PRAGMA index_list(change_records)")
+        cr_indexes = {row[1] for row in cur.fetchall()}
+        assert "idx_cr_tenant_state" in cr_indexes
+        assert "idx_cr_tenant_corr" in cr_indexes
+
+        cur.execute("PRAGMA index_list(change_state_transitions)")
+        cst_indexes = {row[1] for row in cur.fetchall()}
+        assert "idx_cst_change" in cst_indexes
+    finally:
+        conn.close()
+
+
+def test_change_records_migration_is_idempotent():
+    """Running init_db() twice must not break — `IF NOT EXISTS` semantics
+    are how we avoid disturbing the existing Render production tables
+    that were created by `_ensure_tables` before this migration shipped.
+    """
+    init_db()
+    init_db()  # second call must be a no-op, not a DDL collision
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM schema_migrations "
+            "WHERE migration_id = '20260429_043_change_records_canonical'"
+        )
+        # Migration recorded exactly once even after multiple init_db calls.
+        assert cur.fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_analyze_pr_fabric_writes_succeed_after_init_db():
+    """End-to-end: simulate the analyze-pr fabric INSERTs against a fresh
+    DB.  Pre-migration this would have raised; post-migration it must
+    succeed without going through fabric.change_record helpers.
+    """
+    init_db()
+    # Use a per-run change_id so this test is order-independent within the
+    # shared DB_PATH (other tests in this suite leave rows around).
+    import uuid as _uuid
+    change_id = f"chg_coldstart_{_uuid.uuid4().hex[:8]}"
+    correlation_id = f"cor_coldstart_{_uuid.uuid4().hex[:8]}"
+
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.cursor()
+        # Mirrors the INSERT shape at cli.py:1387-1399.
+        cur.execute(
+            """
+            INSERT INTO change_records (
+                tenant_id, change_id, lifecycle_state, enforcement_mode,
+                correlation_id, violation_codes,
+                linked_at, approved_at, deployed_at, incident_at, closed_at,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "test-tenant", change_id, "DEPLOYED", "AUDIT",
+                correlation_id, None,
+                "2026-04-29T00:00:00+00:00", "2026-04-29T00:00:00+00:00",
+                "2026-04-29T00:00:00+00:00", None, None,
+                "2026-04-29T00:00:00+00:00", "2026-04-29T00:00:00+00:00",
+            ),
+        )
+        conn.commit()
+        cur.execute(
+            "SELECT lifecycle_state FROM change_records "
+            "WHERE tenant_id = ? AND change_id = ?",
+            ("test-tenant", change_id),
+        )
+        row = cur.fetchone()
+        assert row is not None
+        assert row[0] == "DEPLOYED"
+    finally:
+        conn.close()

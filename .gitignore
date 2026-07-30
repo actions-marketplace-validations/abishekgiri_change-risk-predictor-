@@ -1,6 +1,11 @@
 # Secrets & Credentials
 .env
 .env.*
+!.env.example
+!/deploy/compose/.env.example
+.env.releasegate
+.env.releasegate.*
+releasegate_secrets.env
 *.key
 *.pem
 secrets/
@@ -24,6 +29,7 @@ credentials/
 
 # Generated Runtime Output
 audit_bundles/
+out/golden/
 *.bundle/
 explanation__*.json
 explanation__*.md
@@ -61,6 +67,7 @@ tmp/
 temp/
 *.tmp
 *.temp
+tests/perf/results/
 
 # Editor / OS Files
 .DS_Store

@@ -1,24 +1,36 @@
-from typing import Dict, Any, List, Optional
-from releasegate.policy.policy_types import Policy, ControlSignal
+import os
+from typing import Dict, Any, List, Tuple
+from releasegate.policy.policy_types import Policy
 from releasegate.policy.loader import PolicyLoader
 from releasegate.enforcement.core_risk import CoreRiskControl
 from releasegate.enforcement.registry import ControlRegistry
 from releasegate.enforcement.types import ControlContext
-from pydantic import BaseModel
+from releasegate.observability.internal_metrics import incr
+from releasegate.storage.base import resolve_tenant_id
+from releasegate.utils.ttl_cache import TTLCache, yaml_tree_fingerprint
+from releasegate.utils.paths import safe_join_under
+from releasegate.signals.dependency_provenance import build_dependency_provenance_signal
+from releasegate.engine_core import (
+    ComplianceRunResult,
+    PolicyResult,
+    check_condition as check_signal_condition,
+    compute_policy_hash,
+    evaluate_policy,
+    flatten_signals,
+)
 
-class PolicyResult(BaseModel):
-    policy_id: str
-    name: str
-    status: str # COMPLIANCE / WARN / BLOCK
-    triggered: bool
-    violations: List[str]
-    evidence: Dict[str, Any]
-    traceability: Optional[Dict[str, Any]] = None # Injected metadata
 
-class ComplianceRunResult(BaseModel):
-    overall_status: str # COMPLIANCE / WARN / BLOCK
-    results: List[PolicyResult]
-    metadata: Dict[str, Any]
+def _policy_cache_ttl_seconds() -> float:
+    try:
+        return float(os.getenv("RELEASEGATE_POLICY_REGISTRY_CACHE_TTL_SECONDS", "300"))
+    except Exception:
+        return 300.0
+
+
+_POLICY_CACHE = TTLCache(
+    max_entries=max(1, int(os.getenv("RELEASEGATE_POLICY_REGISTRY_CACHE_MAX_ENTRIES", "256"))),
+    default_ttl_seconds=max(1.0, _policy_cache_ttl_seconds()),
+)
 
 class ComplianceEngine:
     """
@@ -26,14 +38,40 @@ class ComplianceEngine:
     """
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.loader = PolicyLoader(policy_dir="releasegate/policy/compiled", schema="compiled")
-        self.policies = self.loader.load_all()
+        self.policy_dir = str(config.get("policy_dir") or "releasegate/policy/compiled")
+        self.policy_base_dir = config.get("policy_base_dir")
+        self.tenant_id = resolve_tenant_id(config.get("tenant_id"), allow_none=True) or "system"
+        self.loader = PolicyLoader(policy_dir=self.policy_dir, schema="compiled", base_dir=self.policy_base_dir)
+        self.policies = self._load_compiled_policies()
+        self.policy_hash = self._compute_policy_hash(self.policies)
         
         # Instantiate Controls
         self.core_risk = CoreRiskControl(config)
         
         # Phase 3: Control Registry (all 5 controls)
         self.control_registry = ControlRegistry(config)
+
+    def _policy_cache_key(self) -> Tuple[str, str, str]:
+        base_dir = self.policy_base_dir or os.getcwd()
+        effective_dir = str(safe_join_under(base_dir, self.policy_dir))
+        return (
+            self.tenant_id,
+            os.path.abspath(effective_dir),
+            yaml_tree_fingerprint(effective_dir),
+        )
+
+    def _load_compiled_policies(self) -> List[Policy]:
+        cache_key = self._policy_cache_key()
+        hit, cached = _POLICY_CACHE.get(cache_key)
+        if hit:
+            incr("cache_policy_registry_hit", tenant_id=self.tenant_id)
+            return list(cached)
+
+        incr("cache_policy_registry_miss", tenant_id=self.tenant_id)
+        loaded = self.loader.load_all()
+        policies = [policy for policy in loaded if isinstance(policy, Policy)]
+        _POLICY_CACHE.set(cache_key, tuple(policies), ttl_seconds=_policy_cache_ttl_seconds())
+        return policies
 
     def evaluate(self, raw_signals: Dict[str, Any]) -> ComplianceRunResult:
         # 1. Gather Control Signals from Core Risk (Phase 2)
@@ -57,6 +95,18 @@ class ComplianceEngine:
             registry_result = self.control_registry.run_all(context)
             phase3_signals = registry_result.get("signals", {})
             phase3_findings = registry_result.get("findings", [])
+
+        dp_cfg = self.config.get("dependency_provenance", {}) if isinstance(self.config.get("dependency_provenance"), dict) else {}
+        lockfile_required = bool(dp_cfg.get("lockfile_required", False))
+        dependency_signal = build_dependency_provenance_signal(
+            provider=raw_signals.get("provider"),
+            repo=raw_signals.get("repo", "unknown"),
+            ref=raw_signals.get("head_sha") or raw_signals.get("ref"),
+            lockfile_required=lockfile_required,
+        )
+        phase3_signals["dependency_provenance"] = dependency_signal
+        phase3_signals["dependency_provenance.satisfied"] = bool(dependency_signal.get("satisfied", True))
+        phase3_signals["dependency_provenance.lockfile_required"] = bool(dependency_signal.get("lockfile_required", False))
         
         # 3. Flatten Signals (combine Phase 2 + Phase 3)
         signal_map = self._flatten_signals({
@@ -78,6 +128,9 @@ class ComplianceEngine:
                 overall_status = "BLOCK"
             elif p_res.status == "WARN" and overall_status != "BLOCK":
                 overall_status = "WARN"
+
+        if lockfile_required and not dependency_signal.get("satisfied", True):
+            overall_status = "BLOCK"
         
         # 5. Check for Overrides (Phase 2 Step 8)
         # Check raw signals for override labels
@@ -90,6 +143,9 @@ class ComplianceEngine:
             "core_risk_score": core_output.get("violation_severity"),
             "core_risk_level": core_output.get("severity_level"),
             "raw_features": core_output.get("raw_features", {}),
+            "policy_hash": self.policy_hash,
+            "policy_count": len(self.policies),
+            "phase3_signals": phase3_signals,
             "phase3_findings_count": len(phase3_findings),
             "phase3_findings": [
                 {
@@ -100,7 +156,8 @@ class ComplianceEngine:
                     "file_path": f.file_path
                 }
                 for f in phase3_findings
-            ]
+            ],
+            "dependency_provenance": dependency_signal,
         }
         
         if found_override:
@@ -120,74 +177,18 @@ class ComplianceEngine:
             metadata=metadata
         )
 
+    def _compute_policy_hash(self, policies: List[Policy]) -> str:
+        return compute_policy_hash(policies)
+
     def _evaluate_policy(self, policy: Policy, signals: Dict[str, Any]) -> PolicyResult:
-        violations = []
-        triggered = False
-        
-        # AND Logic: All controls in a policy are evaluated
-        # If ANY control matches the trigger condition, the policy triggers? 
-        # Typically policies specify "violations".
-        # Let's assume: If ALL conditions match, then enforcement triggers?
-        # WAIT. "High Severity Changes Require Review". Signal: severity >= HIGH.
-        # This implies "Trigger if severity is HIGH".
-        # What if multiple signals? usually AND logic for the trigger.
-        
-        triggers = []
-        for ctrl in policy.controls:
-            actual_val = signals.get(ctrl.signal)
-            if self._check_condition(actual_val, ctrl.operator, ctrl.value):
-                triggers.append(f"{ctrl.signal} ({actual_val}) {ctrl.operator} {ctrl.value}")
-        
-        # Policy is "violated" (triggered) if ALL control conditions are met? 
-        # Or ANY? 
-        # For SEC-PR-004: "High Risk" AND "Churn > 500".
-        # Yes, usually composite trigger.
-        
-        if len(triggers) == len(policy.controls):
-            triggered = True
-            violations = triggers
-            status = policy.enforcement.result # BLOCK or WARN
-        else:
-            status = "COMPLIANT"
-        
-        return PolicyResult(
-            policy_id=policy.policy_id,
-            name=policy.name,
-            status=status,
-            triggered=triggered,
-            violations=violations,
-            evidence={}, # Todo: extract specific evidence
-            traceability=policy.metadata or {}
+        return evaluate_policy(
+            policy,
+            signals,
+            check_condition=self._check_condition,
         )
 
     def _check_condition(self, actual, operator, expected) -> bool:
-        if actual is None: return False
-        try:
-            if operator == "==": return actual == expected
-            if operator == "!=": return actual != expected
-            if operator == ">": return float(actual) > float(expected)
-            if operator == ">=": return float(actual) >= float(expected)
-            if operator == "<": return float(actual) < float(expected)
-            if operator == "<=": return float(actual) <= float(expected)
-            if operator == "in":
-                if isinstance(actual, (list, tuple, set)):
-                    return any(a in expected for a in actual)
-                return actual in expected
-            if operator == "not in":
-                if isinstance(actual, (list, tuple, set)):
-                    return all(a not in expected for a in actual)
-                return actual not in expected
-        except:
-            return False
-        return False
+        return check_signal_condition(actual, operator, expected)
 
     def _flatten_signals(self, data: Dict[str, Any], prefix="") -> Dict[str, Any]:
-        """Recursive flatten for dot notation."""
-        out = {}
-        for k, v in data.items():
-            key = f"{prefix}.{k}" if prefix else k
-            if isinstance(v, dict) and k != "files_changed": # Don't flatten lists of files
-                out.update(self._flatten_signals(v, key))
-            else:
-                out[key] = v
-        return out
+        return flatten_signals(data, prefix=prefix, preserve_keys={"files_changed"})
